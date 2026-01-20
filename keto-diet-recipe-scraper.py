@@ -15,6 +15,7 @@ import csv
 import json
 import re
 import sys
+from datetime import datetime
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Iterable, List, Optional, Set
@@ -36,6 +37,7 @@ class Recipe:
     name: str
     ingredients: List[str]
     instructions: List[str]
+    published_date: str
 
 
 class LinkParser(HTMLParser):
@@ -229,15 +231,65 @@ def extract_json_ld_recipe(html: str) -> Optional[Recipe]:
             elif isinstance(instructions_raw, str):
                 instructions = [instructions_raw.strip()]
 
-            return Recipe(url="", name=name, ingredients=ingredients, instructions=instructions)
+            date_published = normalize_date(
+                str(entry.get("datePublished") or entry.get("dateCreated") or "").strip()
+            )
+
+            return Recipe(
+                url="",
+                name=name,
+                ingredients=ingredients,
+                instructions=instructions,
+                published_date=date_published,
+            )
 
     return None
+
+
+def normalize_date(value: str) -> str:
+    if not value:
+        return ""
+    cleaned = value.strip()
+    cleaned = cleaned.replace("Z", "+00:00") if cleaned.endswith("Z") else cleaned
+    try:
+        datetime.fromisoformat(cleaned)
+        return cleaned
+    except ValueError:
+        pass
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", cleaned):
+        return cleaned
+    return ""
+
+
+def extract_published_date(recipe_html: str) -> str:
+    meta_patterns = [
+        r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']publishdate["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']pubdate["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']date["\'][^>]+content=["\']([^"\']+)["\']',
+    ]
+    for pattern in meta_patterns:
+        match = re.search(pattern, recipe_html, flags=re.IGNORECASE)
+        if match:
+            return normalize_date(match.group(1).strip())
+
+    time_match = re.search(
+        r"<time[^>]+datetime=[\"']([^\"']+)[\"']",
+        recipe_html,
+        flags=re.IGNORECASE,
+    )
+    if time_match:
+        return normalize_date(time_match.group(1).strip())
+
+    return ""
 
 
 def extract_recipe_details(recipe_html: str, url: str) -> Recipe:
     json_ld_recipe = extract_json_ld_recipe(recipe_html)
     if json_ld_recipe and json_ld_recipe.name:
         json_ld_recipe.url = url
+        if not json_ld_recipe.published_date:
+            json_ld_recipe.published_date = extract_published_date(recipe_html)
         return json_ld_recipe
 
     parser = RecipeContentParser()
@@ -245,13 +297,20 @@ def extract_recipe_details(recipe_html: str, url: str) -> Recipe:
     name = parser.title or ""
     ingredients = parser.ingredients
     instructions = parser.instructions
-    return Recipe(url=url, name=name, ingredients=ingredients, instructions=instructions)
+    published_date = extract_published_date(recipe_html)
+    return Recipe(
+        url=url,
+        name=name,
+        ingredients=ingredients,
+        instructions=instructions,
+        published_date=published_date,
+    )
 
 
 def write_csv(recipes: Iterable[Recipe], output_path: str) -> None:
     with open(output_path, "w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["url", "name", "ingredients", "instructions"])
+        writer.writerow(["url", "name", "ingredients", "instructions", "published_date"])
         for recipe in recipes:
             writer.writerow(
                 [
@@ -259,6 +318,7 @@ def write_csv(recipes: Iterable[Recipe], output_path: str) -> None:
                     recipe.name,
                     " | ".join(recipe.ingredients),
                     " | ".join(recipe.instructions),
+                    recipe.published_date,
                 ]
             )
 
