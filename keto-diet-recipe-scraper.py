@@ -145,6 +145,8 @@ def is_recipe_link(link: str) -> bool:
     path = parsed.path.rstrip("/")
     if path == "/recipes":
         return False
+    if path.startswith("/recipe_type"):
+        return False
     return "/recipe" in path or "/recipes/" in path
 
 
