@@ -134,24 +134,35 @@ def fetch_html(url: str) -> str:
         return response.read().decode("utf-8", errors="ignore")
 
 
-def is_recipe_link(link: str) -> bool:
+def classify_link(link: str) -> str:
     parsed = urlparse(link)
     if parsed.netloc and parsed.netloc != urlparse(BASE_URL).netloc:
-        return False
+        return "external"
     path = parsed.path.rstrip("/")
-    if path == "/recipes":
-        return False
-    return "/recipe" in path or "/recipes/" in path
+    if not path:
+        return "other"
+    segments = [segment for segment in path.split("/") if segment]
+    if not segments:
+        return "other"
+    if segments[0] == "recipe_type":
+        return "listing"
+    if segments[0] == "recipes":
+        if len(segments) == 1:
+            return "listing"
+        if segments[1] == "page" or "page=" in parsed.query:
+            return "listing"
+        return "recipe"
+    if segments[0] == "recipe":
+        return "recipe" if len(segments) > 1 else "other"
+    return "other"
+
+
+def is_recipe_link(link: str) -> bool:
+    return classify_link(link) == "recipe"
 
 
 def is_listing_page(link: str) -> bool:
-    parsed = urlparse(link)
-    if parsed.netloc and parsed.netloc != urlparse(BASE_URL).netloc:
-        return False
-    path = parsed.path.rstrip("/")
-    if path == "/recipes":
-        return True
-    return path.startswith("/recipes") and ("/page/" in path or "page=" in parsed.query)
+    return classify_link(link) == "listing"
 
 
 def normalize_links(links: Iterable[str]) -> Set[str]:
