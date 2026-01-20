@@ -15,6 +15,7 @@ import csv
 import json
 import re
 import sys
+from datetime import datetime
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Iterable, List, Optional, Set
@@ -230,9 +231,9 @@ def extract_json_ld_recipe(html: str) -> Optional[Recipe]:
             elif isinstance(instructions_raw, str):
                 instructions = [instructions_raw.strip()]
 
-            date_published = str(
-                entry.get("datePublished") or entry.get("dateCreated") or ""
-            ).strip()
+            date_published = normalize_date(
+                str(entry.get("datePublished") or entry.get("dateCreated") or "").strip()
+            )
 
             return Recipe(
                 url="",
@@ -245,6 +246,21 @@ def extract_json_ld_recipe(html: str) -> Optional[Recipe]:
     return None
 
 
+def normalize_date(value: str) -> str:
+    if not value:
+        return ""
+    cleaned = value.strip()
+    cleaned = cleaned.replace("Z", "+00:00") if cleaned.endswith("Z") else cleaned
+    try:
+        datetime.fromisoformat(cleaned)
+        return cleaned
+    except ValueError:
+        pass
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", cleaned):
+        return cleaned
+    return ""
+
+
 def extract_published_date(recipe_html: str) -> str:
     meta_patterns = [
         r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
@@ -255,7 +271,7 @@ def extract_published_date(recipe_html: str) -> str:
     for pattern in meta_patterns:
         match = re.search(pattern, recipe_html, flags=re.IGNORECASE)
         if match:
-            return match.group(1).strip()
+            return normalize_date(match.group(1).strip())
 
     time_match = re.search(
         r"<time[^>]+datetime=[\"']([^\"']+)[\"']",
@@ -263,7 +279,7 @@ def extract_published_date(recipe_html: str) -> str:
         flags=re.IGNORECASE,
     )
     if time_match:
-        return time_match.group(1).strip()
+        return normalize_date(time_match.group(1).strip())
 
     return ""
 
