@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recipe scraper for https://keto-diet.co.il/recipes.
+"""Keto-diet recipe scraper for https://keto-diet.co.il/recipes.
 
 Steps implemented:
 1) Fetch the listing page and discover recipe links.
@@ -23,7 +23,11 @@ from urllib.request import Request, urlopen
 
 BASE_URL = "https://keto-diet.co.il/"
 RECIPES_URL = "https://keto-diet.co.il/recipes"
-USER_AGENT = "Mozilla/5.0 (compatible; RecipeScraper/1.0)"
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_1) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/116.0.0.0 Safari/537.36"
+)
 
 
 @dataclass
