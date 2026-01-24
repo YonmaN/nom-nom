@@ -2,11 +2,10 @@
 """KetoChef recipe scraper for https://ketochef.co.il/recipes/.
 
 Steps implemented:
-1) Compare listing/recipe structure between keto-diet.co.il and ketochef.co.il.
-2) Fetch KetoChef listing page and retrieve recipe names from main page.
-3) Traverse listing pagination to collect all recipe names + links.
-4) Visit each recipe page and pull its title.
-5) Enrich with ingredients + instructions, write to CSV.
+1) Fetch KetoChef listing page and retrieve recipe names from main page.
+2) Traverse listing pagination to collect all recipe names + links.
+3) Visit each recipe page and pull its title.
+4) Enrich with ingredients + instructions, write to CSV.
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ from urllib.request import Request, urlopen
 
 BASE_URL = "https://ketochef.co.il/"
 RECIPES_URL = "https://ketochef.co.il/recipes/"
-COMPARE_URL = "https://keto-diet.co.il/recipes"
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_1) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -274,50 +272,8 @@ def write_csv(recipes: Iterable[Recipe], output_path: str) -> None:
             )
 
 
-def summarize_structure(html: str) -> dict[str, object]:
-    link_parser = LinkParser()
-    link_parser.feed(html)
-    has_json_ld = bool(
-        re.search(r"application/ld\+json", html, flags=re.IGNORECASE)
-    )
-    has_h1 = "<h1" in html.lower()
-    return {
-        "has_json_ld": has_json_ld,
-        "link_count": len(link_parser.links),
-        "has_h1": has_h1,
-    }
-
-
-def compare_structures() -> None:
-    print("Step 1: Compare KetoChef vs Keto-Diet listing structure...")
-    try:
-        keto_chef_html = fetch_html(RECIPES_URL)
-    except Exception as exc:
-        print(f"Failed to fetch KetoChef listing page: {exc}")
-        return
-
-    try:
-        keto_diet_html = fetch_html(COMPARE_URL)
-    except Exception as exc:
-        print(f"Failed to fetch Keto-Diet listing page: {exc}")
-        keto_diet_html = ""
-
-    chef_summary = summarize_structure(keto_chef_html)
-    print(f"KetoChef summary: {chef_summary}")
-
-    if keto_diet_html:
-        diet_summary = summarize_structure(keto_diet_html)
-        print(f"Keto-Diet summary: {diet_summary}")
-        same_json_ld = chef_summary["has_json_ld"] == diet_summary["has_json_ld"]
-        print(f"JSON-LD present on both listings: {same_json_ld}")
-    else:
-        print("Keto-Diet listing unavailable; cannot compare structures.")
-
-
 def main() -> int:
-    compare_structures()
-
-    print("Step 2: Retrieve recipe names from the main KetoChef listing page...")
+    print("Step 1: Retrieve recipe names from the main KetoChef listing page...")
     listing_html = fetch_html(RECIPES_URL)
     names = extract_recipe_names_from_listing(listing_html, BASE_URL)
     if names:
@@ -325,7 +281,7 @@ def main() -> int:
     else:
         print("No recipe names found on the listing page with current selectors.")
 
-    print("Step 3: Collect all recipe links and names from listing pages...")
+    print("Step 2: Collect all recipe links and names from listing pages...")
     listing_pages = extract_listing_pages(listing_html, BASE_URL) | {RECIPES_URL}
     recipe_links: Set[str] = set()
     all_names: List[str] = []
@@ -342,7 +298,7 @@ def main() -> int:
         print(f"Collected {len(all_names)} recipe name(s) from listings.")
     print(f"Found {len(recipe_links)} recipe link(s).")
 
-    print("Step 4 & 5: Retrieve each recipe and extract details...")
+    print("Step 3 & 4: Retrieve each recipe and extract details...")
     recipes: List[Recipe] = []
     for link in sorted(recipe_links):
         try:
