@@ -56,12 +56,33 @@ class RecipeParser(HTMLParser):
         self.steps: List[str] = []
         self._ingredient_buffer: List[str] = []
         self._step_buffer: List[str] = []
+        self._heading_buffer: List[str] = []
+        self._heading_tag: Optional[str] = None
         self._in_title = False
         self._ingredient_depth = 0
         self._step_depth = 0
         self._in_ingredient_item = False
         self._in_step_item = False
         self._ignore_depth = 0
+        self._tag_depth = 0
+        self._section: Optional[str] = None
+        self._section_depth: Optional[int] = None
+
+    @staticmethod
+    def _is_ingredient_heading(text: str) -> bool:
+        lowered = text.lower()
+        return "ingredient" in lowered or "מצרכ" in lowered
+
+    @staticmethod
+    def _is_step_heading(text: str) -> bool:
+        lowered = text.lower()
+        return (
+            "instruction" in lowered
+            or "direction" in lowered
+            or "step" in lowered
+            or "אופן הכנה" in lowered
+            or "הכנה" in lowered
+        )
 
     def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
         if tag in {"script", "style"}:
@@ -70,11 +91,17 @@ class RecipeParser(HTMLParser):
         if self._ignore_depth:
             return
 
+        self._tag_depth += 1
+
         attrs_dict = {key: value for key, value in attrs}
         class_attr = (attrs_dict.get("class") or "").lower()
 
         if tag == "h1" and not self.title_parts:
             self._in_title = True
+
+        if tag in {"h2", "h3", "h4"}:
+            self._heading_tag = tag
+            self._heading_buffer = []
 
         if self._ingredient_depth:
             self._ingredient_depth += 1
@@ -94,12 +121,32 @@ class RecipeParser(HTMLParser):
             self._in_step_item = True
             self._step_buffer = []
 
+        if self._section == "ingredients" and tag in {"li", "p"} and not self._ingredient_depth:
+            self._in_ingredient_item = True
+            self._ingredient_buffer = []
+
+        if self._section == "steps" and tag in {"li", "p"} and not self._step_depth:
+            self._in_step_item = True
+            self._step_buffer = []
+
     def handle_endtag(self, tag: str) -> None:
         if tag in {"script", "style"} and self._ignore_depth:
             self._ignore_depth -= 1
             return
         if self._ignore_depth:
             return
+
+        if self._heading_tag == tag:
+            heading_text = " ".join(self._heading_buffer).strip()
+            if heading_text:
+                if self._is_ingredient_heading(heading_text):
+                    self._section = "ingredients"
+                    self._section_depth = max(self._tag_depth - 1, 0)
+                elif self._is_step_heading(heading_text):
+                    self._section = "steps"
+                    self._section_depth = max(self._tag_depth - 1, 0)
+            self._heading_tag = None
+            self._heading_buffer = []
 
         if tag == "h1" and self._in_title:
             self._in_title = False
@@ -124,6 +171,13 @@ class RecipeParser(HTMLParser):
         if self._step_depth:
             self._step_depth -= 1
 
+        if self._tag_depth:
+            self._tag_depth -= 1
+
+        if self._section_depth is not None and self._tag_depth < self._section_depth:
+            self._section = None
+            self._section_depth = None
+
     def handle_data(self, data: str) -> None:
         if self._ignore_depth:
             return
@@ -132,6 +186,8 @@ class RecipeParser(HTMLParser):
             return
         if self._in_title:
             self.title_parts.append(text)
+        if self._heading_tag:
+            self._heading_buffer.append(text)
         if self._in_ingredient_item:
             self._ingredient_buffer.append(text)
         if self._in_step_item:
