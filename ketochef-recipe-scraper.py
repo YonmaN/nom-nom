@@ -13,7 +13,7 @@ import csv
 import sys
 from html.parser import HTMLParser
 from typing import Iterable, List, Optional, Set
-from urllib.parse import quote, urljoin, urlparse, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urljoin, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 BASE_URL = "https://ketochef.co.il/"
@@ -114,7 +114,7 @@ def write_csv(urls: Iterable[str], output_path: str) -> None:
         writer = csv.writer(csv_file)
         writer.writerow(["url"])
         for url in sorted(urls):
-            writer.writerow([url])
+            writer.writerow([unquote(url)])
 
 
 def main() -> int:
