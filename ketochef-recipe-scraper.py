@@ -72,17 +72,21 @@ class RecipeParser(HTMLParser):
     @staticmethod
     def _is_ingredient_heading(text: str) -> bool:
         lowered = text.lower()
-        return "ingredient" in lowered or "מצרכ" in lowered
+        normalized = lowered.replace(":", "").strip()
+        return "ingredient" in normalized or "מצרכ" in normalized or "רכיב" in normalized
 
     @staticmethod
     def _is_step_heading(text: str) -> bool:
         lowered = text.lower()
+        normalized = lowered.replace(":", "").strip()
         return (
-            "instruction" in lowered
-            or "direction" in lowered
-            or "step" in lowered
-            or "אופן הכנה" in lowered
-            or "הכנה" in lowered
+            "instruction" in normalized
+            or "direction" in normalized
+            or "step" in normalized
+            or "אופן הכנה" in normalized
+            or "הכנה" in normalized
+            or "הוראות הכנה" in normalized
+            or "הוראות" in normalized
         )
 
     def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
