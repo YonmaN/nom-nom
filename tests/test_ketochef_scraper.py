@@ -4,7 +4,7 @@ from importlib.machinery import SourceFileLoader
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SCRAPER_PATH = ROOT / "keto-diet-recipe-scraper.py"
+SCRAPER_PATH = ROOT / "ketochef-recipe-scraper.py"
 scraper = SourceFileLoader("ketochef_scraper", str(SCRAPER_PATH)).load_module()
 
 

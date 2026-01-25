@@ -1,28 +1,43 @@
 #!/usr/bin/env python3
-"""Ketochef recipe scraper for https://ketochef.co.il/recipes.
+"""Keto-diet recipe scraper for https://keto-diet.co.il/recipes.
 
 Steps implemented:
-1) Fetch the listing page and discover recipe links from the HTML document.
-2) Traverse pagination links to gather recipe URLs from listing pages only.
-3) Write the collected recipe URLs to a UTF-8 CSV (URL-encoded).
+1) Fetch the listing page and discover recipe links.
+2) Extract recipe names from the listing page.
+3) Traverse all listing pages (if pagination exists) to collect all names.
+4) Visit each recipe page and pull just the title.
+5) Enrich data by extracting ingredients and instructions, writing to CSV.
 """
 
 from __future__ import annotations
 
 import csv
+import json
+import re
 import sys
+from datetime import datetime
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Iterable, List, Optional, Set
-from urllib.parse import quote, urljoin, urlparse, urlsplit, urlunsplit
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
-BASE_URL = "https://ketochef.co.il/"
-RECIPES_URL = "https://ketochef.co.il/recipes"
+BASE_URL = "https://keto-diet.co.il/"
+RECIPES_URL = "https://keto-diet.co.il/recipes"
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_1) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/116.0.0.0 Safari/537.36"
 )
+
+
+@dataclass
+class Recipe:
+    url: str
+    name: str
+    ingredients: List[str]
+    instructions: List[str]
+    published_date: str
 
 
 class LinkParser(HTMLParser):
@@ -38,6 +53,87 @@ class LinkParser(HTMLParser):
                 self.links.append(value)
 
 
+class ListingParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._current_href: Optional[str] = None
+        self._buffer: List[str] = []
+        self.recipe_names: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
+        if tag != "a":
+            return
+        href = None
+        for key, value in attrs:
+            if key == "href" and value:
+                href = value
+                break
+        if href:
+            self._current_href = href
+            self._buffer = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "a" or not self._current_href:
+            return
+        text = " ".join(" ".join(self._buffer).split())
+        if text:
+            absolute = urljoin(BASE_URL, self._current_href)
+            if is_recipe_link(absolute):
+                self.recipe_names.append(text)
+        self._current_href = None
+        self._buffer = []
+
+    def handle_data(self, data: str) -> None:
+        if self._current_href is not None:
+            self._buffer.append(data)
+
+
+class RecipeContentParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title: Optional[str] = None
+        self._in_h1 = False
+        self._section_stack: List[str] = []
+        self.ingredients: List[str] = []
+        self.instructions: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
+        attrs_dict = {key: (value or "") for key, value in attrs}
+        class_attr = attrs_dict.get("class", "")
+        class_tokens = {token.strip().lower() for token in class_attr.split() if token.strip()}
+
+        if tag == "h1":
+            self._in_h1 = True
+
+        if class_tokens & {"ingredients", "ingredient", "recipe-ingredients"}:
+            self._section_stack.append("ingredients")
+        elif class_tokens & {"instructions", "instruction", "directions", "method"}:
+            self._section_stack.append("instructions")
+        else:
+            self._section_stack.append("")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "h1":
+            self._in_h1 = False
+        if self._section_stack:
+            self._section_stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if not text:
+            return
+
+        if self._in_h1 and not self.title:
+            self.title = text
+
+        if self._section_stack:
+            section = self._section_stack[-1]
+            if section == "ingredients":
+                self.ingredients.append(text)
+            elif section == "instructions":
+                self.instructions.append(text)
+
+
 def fetch_html(url: str) -> str:
     request = Request(url, headers={"User-Agent": USER_AGENT})
     with urlopen(request, timeout=30) as response:
@@ -51,9 +147,9 @@ def is_recipe_link(link: str) -> bool:
     path = parsed.path.rstrip("/")
     if path == "/recipes":
         return False
-    if path.startswith("/recipes/page/") or (path.startswith("/recipes") and "page=" in parsed.query):
+    if path.startswith("/recipe_type"):
         return False
-    return path.startswith("/recipe") or path.startswith("/recipes/")
+    return "/recipe" in path or "/recipes/" in path
 
 
 def is_listing_page(link: str) -> bool:
@@ -61,22 +157,15 @@ def is_listing_page(link: str) -> bool:
     if parsed.netloc and parsed.netloc != urlparse(BASE_URL).netloc:
         return False
     path = parsed.path.rstrip("/")
+    if path == "/recipes":
+        return True
     return path.startswith("/recipes") and ("/page/" in path or "page=" in parsed.query)
-
-
-def normalize_url(link: str) -> str:
-    absolute = urljoin(BASE_URL, link)
-    parts = urlsplit(absolute)
-    safe_path = quote(parts.path, safe="/%")
-    safe_query = quote(parts.query, safe="=&%")
-    safe_fragment = quote(parts.fragment, safe="")
-    return urlunsplit((parts.scheme, parts.netloc, safe_path, safe_query, safe_fragment))
 
 
 def normalize_links(links: Iterable[str]) -> Set[str]:
     normalized = set()
     for link in links:
-        absolute = normalize_url(link)
+        absolute = urljoin(BASE_URL, link)
         if is_recipe_link(absolute):
             normalized.add(absolute)
     return normalized
@@ -88,44 +177,196 @@ def extract_recipe_links(listing_html: str) -> Set[str]:
     return normalize_links(parser.links)
 
 
+def extract_recipe_names_from_listing(listing_html: str) -> List[str]:
+    parser = ListingParser()
+    parser.feed(listing_html)
+    return parser.recipe_names
+
+
 def extract_listing_pages(listing_html: str) -> Set[str]:
     parser = LinkParser()
     parser.feed(listing_html)
     listing_pages = set()
     for link in parser.links:
-        absolute = normalize_url(link)
+        absolute = urljoin(BASE_URL, link)
         if is_listing_page(absolute):
             listing_pages.add(absolute)
     return listing_pages
 
 
-def collect_recipe_links(start_url: str) -> Set[str]:
-    listing_html = fetch_html(start_url)
-    listing_pages = extract_listing_pages(listing_html) | {start_url}
-    recipe_links: Set[str] = set()
-    for page_url in sorted(listing_pages):
-        page_html = listing_html if page_url == start_url else fetch_html(page_url)
-        recipe_links.update(extract_recipe_links(page_html))
-    return recipe_links
+def extract_json_ld_recipe(html: str) -> Optional[Recipe]:
+    script_blocks = re.findall(
+        r"<script[^>]+type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>",
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    for block in script_blocks:
+        try:
+            data = json.loads(block.strip())
+        except json.JSONDecodeError:
+            continue
+
+        candidates = data if isinstance(data, list) else [data]
+        for entry in candidates:
+            if not isinstance(entry, dict):
+                continue
+            entry_type = entry.get("@type") or entry.get("type")
+            if isinstance(entry_type, list):
+                is_recipe = any(t.lower() == "recipe" for t in entry_type if isinstance(t, str))
+            else:
+                is_recipe = isinstance(entry_type, str) and entry_type.lower() == "recipe"
+            if not is_recipe:
+                continue
+
+            name = str(entry.get("name") or "").strip()
+            ingredients = [i.strip() for i in entry.get("recipeIngredient", []) if isinstance(i, str)]
+            instructions_raw = entry.get("recipeInstructions", [])
+            instructions: List[str] = []
+            if isinstance(instructions_raw, list):
+                for instruction in instructions_raw:
+                    if isinstance(instruction, str):
+                        instructions.append(instruction.strip())
+                    elif isinstance(instruction, dict):
+                        text = instruction.get("text")
+                        if isinstance(text, str):
+                            instructions.append(text.strip())
+            elif isinstance(instructions_raw, str):
+                instructions = [instructions_raw.strip()]
+
+            date_published = normalize_date(
+                str(entry.get("datePublished") or entry.get("dateCreated") or "").strip()
+            )
+
+            return Recipe(
+                url="",
+                name=name,
+                ingredients=ingredients,
+                instructions=instructions,
+                published_date=date_published,
+            )
+
+    return None
 
 
-def write_csv(urls: Iterable[str], output_path: str) -> None:
+def normalize_date(value: str) -> str:
+    if not value:
+        return ""
+    cleaned = value.strip()
+    cleaned = cleaned.replace("Z", "+00:00") if cleaned.endswith("Z") else cleaned
+    try:
+        datetime.fromisoformat(cleaned)
+        return cleaned
+    except ValueError:
+        pass
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", cleaned):
+        return cleaned
+    return ""
+
+
+def extract_published_date(recipe_html: str) -> str:
+    meta_patterns = [
+        r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']publishdate["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']pubdate["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']date["\'][^>]+content=["\']([^"\']+)["\']',
+    ]
+    for pattern in meta_patterns:
+        match = re.search(pattern, recipe_html, flags=re.IGNORECASE)
+        if match:
+            return normalize_date(match.group(1).strip())
+
+    time_match = re.search(
+        r"<time[^>]+datetime=[\"']([^\"']+)[\"']",
+        recipe_html,
+        flags=re.IGNORECASE,
+    )
+    if time_match:
+        return normalize_date(time_match.group(1).strip())
+
+    return ""
+
+
+def extract_recipe_details(recipe_html: str, url: str) -> Recipe:
+    json_ld_recipe = extract_json_ld_recipe(recipe_html)
+    if json_ld_recipe and json_ld_recipe.name:
+        json_ld_recipe.url = url
+        if not json_ld_recipe.published_date:
+            json_ld_recipe.published_date = extract_published_date(recipe_html)
+        return json_ld_recipe
+
+    parser = RecipeContentParser()
+    parser.feed(recipe_html)
+    name = parser.title or ""
+    ingredients = parser.ingredients
+    instructions = parser.instructions
+    published_date = extract_published_date(recipe_html)
+    return Recipe(
+        url=url,
+        name=name,
+        ingredients=ingredients,
+        instructions=instructions,
+        published_date=published_date,
+    )
+
+
+def write_csv(recipes: Iterable[Recipe], output_path: str) -> None:
     with open(output_path, "w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["url"])
-        for url in sorted(urls):
-            writer.writerow([url])
+        writer.writerow(["url", "name", "ingredients", "instructions", "published_date"])
+        for recipe in recipes:
+            writer.writerow(
+                [
+                    recipe.url,
+                    recipe.name,
+                    " | ".join(recipe.ingredients),
+                    " | ".join(recipe.instructions),
+                    recipe.published_date,
+                ]
+            )
 
 
 def main() -> int:
     print("Step 1: Fetch listing page and discover structure...")
-    print(f"Fetching {RECIPES_URL}")
-    recipe_links = collect_recipe_links(RECIPES_URL)
+    listing_html = fetch_html(RECIPES_URL)
+
+    print("Step 2: Retrieve recipe names from the main page...")
+    names = extract_recipe_names_from_listing(listing_html)
+    if names:
+        print(f"Found {len(names)} name(s):", names)
+    else:
+        print("No recipe names found on the listing page with current selectors.")
+
+    print("Step 3: Collect all recipe links and names from listing pages...")
+    listing_pages = extract_listing_pages(listing_html) | {RECIPES_URL}
+    recipe_links: Set[str] = set()
+    all_names: List[str] = []
+    for page_url in sorted(listing_pages):
+        try:
+            page_html = listing_html if page_url == RECIPES_URL else fetch_html(page_url)
+        except Exception as exc:
+            print(f"Failed to fetch listing page {page_url}: {exc}")
+            continue
+        recipe_links.update(extract_recipe_links(page_html))
+        all_names.extend(extract_recipe_names_from_listing(page_html))
+
+    if all_names:
+        print(f"Collected {len(all_names)} recipe name(s) from listings.")
     print(f"Found {len(recipe_links)} recipe link(s).")
 
+    print("Step 4 & 5: Retrieve each recipe and extract details...")
+    recipes: List[Recipe] = []
+    for link in recipe_links:
+        try:
+            html = fetch_html(link)
+        except Exception as exc:
+            print(f"Failed to fetch {link}: {exc}")
+            continue
+        recipe = extract_recipe_details(html, link)
+        recipes.append(recipe)
+
     output_path = "recipes.csv"
-    write_csv(recipe_links, output_path)
-    print(f"Wrote {len(recipe_links)} recipe URLs to {output_path}.")
+    write_csv(recipes, output_path)
+    print(f"Wrote {len(recipes)} recipes to {output_path}.")
 
     return 0
 
