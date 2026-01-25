@@ -65,6 +65,7 @@ class RecipeParser(HTMLParser):
         self._in_step_item = False
         self._ignore_depth = 0
         self._tag_depth = 0
+        self._content_depth = 0
         self._section: Optional[str] = None
         self._section_depth: Optional[int] = None
 
@@ -96,8 +97,16 @@ class RecipeParser(HTMLParser):
         attrs_dict = {key: value for key, value in attrs}
         class_attr = (attrs_dict.get("class") or "").lower()
 
+        if self._content_depth:
+            self._content_depth += 1
+        elif "theme-post-content" in class_attr:
+            self._content_depth = 1
+
         if tag == "h1" and not self.title_parts:
             self._in_title = True
+
+        if not self._content_depth and not self._in_title:
+            return
 
         if tag in {"h2", "h3", "h4"}:
             self._heading_tag = tag
@@ -134,6 +143,9 @@ class RecipeParser(HTMLParser):
             self._ignore_depth -= 1
             return
         if self._ignore_depth:
+            return
+
+        if not self._content_depth and not self._in_title:
             return
 
         if self._heading_tag == tag:
@@ -174,12 +186,17 @@ class RecipeParser(HTMLParser):
         if self._tag_depth:
             self._tag_depth -= 1
 
+        if self._content_depth:
+            self._content_depth -= 1
+
         if self._section_depth is not None and self._tag_depth < self._section_depth:
             self._section = None
             self._section_depth = None
 
     def handle_data(self, data: str) -> None:
         if self._ignore_depth:
+            return
+        if not self._content_depth and not self._in_title:
             return
         text = data.strip()
         if not text:
