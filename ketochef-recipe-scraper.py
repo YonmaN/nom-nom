@@ -4,7 +4,8 @@
 Steps implemented:
 1) Fetch the listing page and discover recipe links from the HTML document.
 2) Traverse pagination links to gather recipe URLs from listing pages only.
-3) Write the collected recipe URLs to a UTF-8 CSV (URL-encoded).
+3) Fetch each recipe page and extract the name, ingredients, and steps.
+4) Write the collected recipe data to a UTF-8 CSV (URL-encoded).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import csv
 import sys
 from html.parser import HTMLParser
+from dataclasses import dataclass
 from typing import Iterable, List, Optional, Set
 from urllib.parse import quote, unquote, urljoin, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -36,6 +38,104 @@ class LinkParser(HTMLParser):
         for key, value in attrs:
             if key == "href" and value:
                 self.links.append(value)
+
+
+@dataclass
+class RecipeData:
+    url: str
+    name: str
+    ingredients: List[str]
+    steps: List[str]
+
+
+class RecipeParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title_parts: List[str] = []
+        self.ingredients: List[str] = []
+        self.steps: List[str] = []
+        self._ingredient_buffer: List[str] = []
+        self._step_buffer: List[str] = []
+        self._in_title = False
+        self._ingredient_depth = 0
+        self._step_depth = 0
+        self._in_ingredient_item = False
+        self._in_step_item = False
+        self._ignore_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
+        if tag in {"script", "style"}:
+            self._ignore_depth += 1
+            return
+        if self._ignore_depth:
+            return
+
+        attrs_dict = {key: value for key, value in attrs}
+        class_attr = (attrs_dict.get("class") or "").lower()
+
+        if tag == "h1" and not self.title_parts:
+            self._in_title = True
+
+        if self._ingredient_depth:
+            self._ingredient_depth += 1
+        elif "ingredient" in class_attr:
+            self._ingredient_depth = 1
+
+        if self._step_depth:
+            self._step_depth += 1
+        elif "instruction" in class_attr or "direction" in class_attr or "step" in class_attr:
+            self._step_depth = 1
+
+        if self._ingredient_depth and tag in {"li", "p"}:
+            self._in_ingredient_item = True
+            self._ingredient_buffer = []
+
+        if self._step_depth and tag in {"li", "p"}:
+            self._in_step_item = True
+            self._step_buffer = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"} and self._ignore_depth:
+            self._ignore_depth -= 1
+            return
+        if self._ignore_depth:
+            return
+
+        if tag == "h1" and self._in_title:
+            self._in_title = False
+
+        if self._in_ingredient_item and tag in {"li", "p"}:
+            item = "".join(self._ingredient_buffer).strip()
+            if item:
+                self.ingredients.append(item)
+            self._in_ingredient_item = False
+            self._ingredient_buffer = []
+
+        if self._in_step_item and tag in {"li", "p"}:
+            item = "".join(self._step_buffer).strip()
+            if item:
+                self.steps.append(item)
+            self._in_step_item = False
+            self._step_buffer = []
+
+        if self._ingredient_depth:
+            self._ingredient_depth -= 1
+
+        if self._step_depth:
+            self._step_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._ignore_depth:
+            return
+        text = data.strip()
+        if not text:
+            return
+        if self._in_title:
+            self.title_parts.append(text)
+        if self._in_ingredient_item:
+            self._ingredient_buffer.append(text)
+        if self._in_step_item:
+            self._step_buffer.append(text)
 
 
 def fetch_html(url: str) -> str:
@@ -109,12 +209,40 @@ def collect_recipe_links(start_url: str) -> Set[str]:
     return recipe_links
 
 
-def write_csv(urls: Iterable[str], output_path: str) -> None:
+def extract_recipe_data(recipe_html: str, url: str = "") -> RecipeData:
+    parser = RecipeParser()
+    parser.feed(recipe_html)
+    name = " ".join(parser.title_parts).strip()
+    return RecipeData(
+        url=url,
+        name=name,
+        ingredients=parser.ingredients,
+        steps=parser.steps,
+    )
+
+
+def fetch_recipe_data(url: str) -> RecipeData:
+    recipe_html = fetch_html(url)
+    return extract_recipe_data(recipe_html, url=url)
+
+
+def format_list(items: Iterable[str]) -> str:
+    return " | ".join(item.strip() for item in items if item.strip())
+
+
+def write_csv(recipes: Iterable[RecipeData], output_path: str) -> None:
     with open(output_path, "w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["url"])
-        for url in sorted(urls):
-            writer.writerow([unquote(url)])
+        writer.writerow(["url", "recipe_name", "ingredients", "steps"])
+        for recipe in recipes:
+            writer.writerow(
+                [
+                    unquote(recipe.url),
+                    recipe.name,
+                    format_list(recipe.ingredients),
+                    format_list(recipe.steps),
+                ]
+            )
 
 
 def main() -> int:
@@ -123,9 +251,13 @@ def main() -> int:
     recipe_links = collect_recipe_links(RECIPES_URL)
     print(f"Found {len(recipe_links)} recipe link(s).")
 
+    print("Step 2: Fetch recipe pages and extract details...")
+    recipes = [fetch_recipe_data(url) for url in sorted(recipe_links)]
+    print(f"Extracted {len(recipes)} recipe record(s).")
+
     output_path = "recipes.csv"
-    write_csv(recipe_links, output_path)
-    print(f"Wrote {len(recipe_links)} recipe URLs to {output_path}.")
+    write_csv(recipes, output_path)
+    print(f"Wrote {len(recipes)} recipe rows to {output_path}.")
 
     return 0
 

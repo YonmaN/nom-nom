@@ -16,6 +16,9 @@ class KetochefScraperFixtureTests(unittest.TestCase):
         self.page2 = (ROOT / "fixtures/ketochef_recipes_page2.html").read_text(
             encoding="utf-8"
         )
+        self.recipe_page = (ROOT / "fixtures/ketochef_recipe_page.html").read_text(
+            encoding="utf-8"
+        )
 
     def test_extract_recipe_links_from_page1(self) -> None:
         links = scraper.extract_recipe_links(self.page1)
@@ -45,6 +48,24 @@ class KetochefScraperFixtureTests(unittest.TestCase):
                 "https://ketochef.co.il/recipes/page/2",
                 "https://ketochef.co.il/recipes?page=3",
             },
+        )
+
+    def test_extract_recipe_data(self) -> None:
+        data = scraper.extract_recipe_data(
+            self.recipe_page, url="https://ketochef.co.il/recipe/avocado-salad"
+        )
+        self.assertEqual(data.name, "סלט אבוקדו עם עשבי תיבול")
+        self.assertEqual(
+            data.ingredients,
+            ["2 אבוקדו בשלים", "1 כף שמן זית", "מלח ופלפל לפי הטעם"],
+        )
+        self.assertEqual(
+            data.steps,
+            [
+                "חותכים את האבוקדו לקוביות.",
+                "מערבבים עם שמן זית ותיבול.",
+                "מגישים מיד.",
+            ],
         )
 
 
