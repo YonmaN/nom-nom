@@ -73,7 +73,12 @@ class RecipeParser(HTMLParser):
     def _is_ingredient_heading(text: str) -> bool:
         lowered = text.lower()
         normalized = lowered.replace(":", "").strip()
-        return "ingredient" in normalized or "מצרכ" in normalized or "רכיב" in normalized
+        return (
+            "ingredient" in normalized
+            or "מצרכ" in normalized
+            or "רכיב" in normalized
+            or "מוצר" in normalized
+        )
 
     @staticmethod
     def _is_step_heading(text: str) -> bool:
@@ -87,6 +92,7 @@ class RecipeParser(HTMLParser):
             or "הכנה" in normalized
             or "הוראות הכנה" in normalized
             or "הוראות" in normalized
+            or "צעד" in normalized
         )
 
     def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
@@ -112,7 +118,7 @@ class RecipeParser(HTMLParser):
         if not self._content_depth and not self._in_title:
             return
 
-        if tag in {"h2", "h3", "h4"}:
+        if tag in {"h2", "h3", "h4", "p"}:
             self._heading_tag = tag
             self._heading_buffer = []
 
